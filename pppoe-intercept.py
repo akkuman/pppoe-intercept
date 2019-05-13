@@ -47,18 +47,18 @@ class PPPoEServer(object):
                 0x8863: {
                     "code": {
                         #PADI
-                        0x09: (self.send_pado_packet, "PADI阶段开始,发送PADO..."),
+                        0x09: self.send_pado_packet,
                         #PADR
-                        0x19: (self.send_pads_packet, "PADR阶段开始,发送PADS...")
+                        0x19: self.send_pads_packet
                     }
                 },
                 #会话阶段
                 0x8864:{
                     "proto":{
                         #LCP链路处理
-                        0xc021:(self.send_lcp,"----------会话阶段----------"),
+                        0xc021: self.send_lcp,
                         #PAP协议处理
-                        0xc023:(self.get_papinfo,"获取账号信息...")
+                        0xc023: self.get_papinfo
                     }
                 }
             }
@@ -67,15 +67,15 @@ class PPPoEServer(object):
                 for k, v in _nMethod.items():
                     _nVal = getattr(pkt, k)
                     if _nVal in _nMethod[k]:
-                        _nObj = _nMethod[k][_nVal]
-                        print(_nObj[1])
-                        _nObj[0](pkt)
+                        handle_func = _nMethod[k][_nVal]
+                        handle_func(pkt)
 
 
     #处理 PPP LCP 请求
     def send_lcp(self, pkt):
         # 初始化 clientMap
         if not self.clientMap.get(pkt.src):
+            print("----------会话阶段----------")
             self.clientMap[pkt.src] = {"req": 0, "ack": 0}
             
         # 处理 LCP-Configuration-Req 请求
@@ -102,7 +102,7 @@ class PPPoEServer(object):
         # 处理 LCP-Configuration-Ack 请求
         elif bytes(pkt.payload)[8] == 0x02:
             self.clientMap[pkt.src]['ack'] += 1
-            print("第 %d 收到LCP-Config-Ack" % self.clientMap[pkt.src]["ack"])
+            print("第 %d 次收到LCP-Config-Ack" % self.clientMap[pkt.src]["ack"])
         else:
             pass
 
@@ -111,12 +111,14 @@ class PPPoEServer(object):
         # pap-req
         _payLoad = bytes(pkt.payload)
         if _payLoad[8] == 0x01:
+            print("获取账号信息...")
             _nUserLen = int(_payLoad[12])
             _nPassLen = int(_payLoad[13 + _nUserLen])
             _userName = _payLoad[13:13 + _nUserLen]
             _passWord = _payLoad[14 + _nUserLen:14 + _nUserLen + _nPassLen]
-            print("get User:%s,Pass:%s" % (_userName, _passWord))
-            #self.send_pap_authreject(pkt)
+            print("账户: %s\n密码: %s" % (_userName.decode('utf-8'), _passWord.decode('utf-8')))
+            self.send_pap_authreject(pkt)
+            self.send_lcp_end_packet(pkt)
             if pkt.src in self.clientMap:
                 del self.clientMap[pkt.src]
 
@@ -125,9 +127,9 @@ class PPPoEServer(object):
 
     # 发送pap拒绝验证
     def send_pap_authreject(self, pkt):
-        pkt.dst, pkt.src = pkt.src, pkt.dst
-        pkt.payload = b'\x03\x02\x00\x06\x01\x00'
-        scapy.sendp(pkt)
+        _payload = b'\x03' + bytes(pkt.payload)[9:10] + b'\x00\x06\x01\x00'
+        _pkt = Ether(src=pkt.dst, dst=pkt.src, type=0x8864) / PPPoED(version=1, type=1, code=0x00, sessionid=SESSION_ID) / PPP(proto=0xc023) / _payload
+        scapy.sendp(_pkt)
 
     # 发送lcp-config-ack回执包
     def send_lcp_ack_packet(self, pkt):
@@ -211,18 +213,19 @@ class PPPoEServer(object):
     
     # 发送 lcp-echo-req包
     def send_lcp_echo_request(self, pkt):
-        
         _payload = b'\x09\x00\x00\x08' + b'\x25\x5f\xc5\xcb'
         lcp_req = Ether(src=pkt.dst, dst=pkt.src, type=0x8864) / PPPoED(version=1, type=1, code=0x00, sessionid=SESSION_ID) / PPP(proto=0xc021) / _payload
         scapy.sendp(lcp_req)
     
     #发送lcp-termination会话终止包
     def send_lcp_end_packet(self, pkt):
-        _pkt = Ether(src=pkt.dst, dst=pkt.src, type=0x8863) / PPPoE(version=0x1, type=0x1, code=0xA7, sessionid=0x01, len=0)
+        _payload = b'\x05\x02\x00\x04'
+        _pkt = Ether(src=pkt.dst, dst=pkt.src, type=0x8864) / PPPoE(version=0x1, type=0x1, code=0x00, sessionid=SESSION_ID) / PPP(proto=0xc021) / _payload
         scapy.sendp(_pkt)
 
     #发送PADS回执包
     def send_pads_packet(self, pkt):
+        print("PADR阶段开始,发送PADS...")
         #寻找客户端的Host_Uniq
         _host_Uniq = self.padi_find_hostuniq(pkt.payload)
         _payload = b'\x01\x01\x00\x00'
@@ -236,6 +239,7 @@ class PPPoEServer(object):
 
     #发送PADO回执包
     def send_pado_packet(self, pkt):
+        print("PADI阶段开始,发送PADO...")
         # 寻找客户端的Host_Uniq
         _host_Uniq = self.padi_find_hostuniq(pkt.payload)
         _payload = b'\x01\x02\x00\x07akkuman\x01\x01\x00\x00'
