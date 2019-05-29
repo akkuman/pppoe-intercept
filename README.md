@@ -11,6 +11,8 @@
 
 https://github.com/akkuman/pppoe-intercept/releases
 
+
+电脑上先安装 winpcap
 下载 pppoe-intercept.exe 后直接双击运行，然后打开电脑客户端拨号即可。
 
 ## 原理
