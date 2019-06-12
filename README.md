@@ -13,7 +13,7 @@ https://github.com/akkuman/pppoe-intercept/releases
 
 
 电脑上先安装 winpcap
-下载 pppoe-intercept.exe 后直接双击运行，然后打开电脑客户端拨号即可。
+下载 pppoe-intercept.exe 后直接双击运行，选择你要捕获的网卡，点击开始捕获，然后打开电脑客户端拨号即可。
 
 ## 原理
 
