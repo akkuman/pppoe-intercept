@@ -3,7 +3,7 @@
 '''
 @author Akkuman
 @date 2019.5.11
-@update 2019.5.14
+@update 2019.6.12
 '''
 
 import struct
@@ -14,6 +14,9 @@ import socket
 
 from scapy.layers.ppp import *
 import scapy.all as scapy
+
+# 获取到账号密码后的回调函数
+CALLBACK = None
 
 MAC_ADDRESS = "0a:0a:0a:0a:0a:0a"
 # 会话 id，可自定义
@@ -47,7 +50,7 @@ def get_host_ip_bytes():
     
     return bytes_ip
     
-class PPPoEServer(object):
+class PPPoEServer:
     filter = "pppoed or pppoes"
     
     def __init__(self):
@@ -57,8 +60,11 @@ class PPPoEServer(object):
         self.password = None
 
     # 开始监听
-    def start(self):
-        scapy.sniff(filter=self.filter, prn=self.filterData)
+    def start(self, iface=None):
+        if iface:
+            scapy.sniff(iface=iface, filter=self.filter, prn=self.filterData)
+        else:
+            scapy.sniff(filter=self.filter, prn=self.filterData)
 
     # 过滤pppoe数据
     def filterData(self, pkt):
@@ -176,6 +182,9 @@ class PPPoEServer(object):
             _passWord = _payLoad[14 + _nUserLen:14 + _nUserLen + _nPassLen]
             self.username = _userName.decode('utf-8')
             self.password = _passWord.decode('utf-8')
+            if CALLBACK:
+                print("回调")
+                CALLBACK(self.username, self.password)
             print("账户: %s\n密码: %s" % (self.username, self.password))
             # 拒绝认证
             #self.send_pap_authreject(pkt)
